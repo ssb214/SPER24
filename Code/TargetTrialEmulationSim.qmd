@@ -1,0 +1,410 @@
+---
+title: "Target Trial Simulation"
+author: "Susan Hoffman, MPH"
+format: 
+  pdf:
+    include-in-header:
+      text: |
+        \usepackage{multirow}
+editor: visual
+---
+
+# Simulation Parameters
+
+Exposure:
+
+-   The primary causal question of interest focuses on antibiotic initiation at or after 24 weeks gestation
+
+Outcome
+
+-   Preterm delivery
+
+Causal contrast:
+
+-   Intention to treat effect
+
+Exchangeability considerations:
+
+-   Age (\<18 - 4%; 18-35 - 79%; \>=35 - 17%)
+
+-   Parity (0 - 41%, \>=1 - 59%)
+
+-   HIV status (Negative - 78%; Living with HIV - 22%)
+
+# Data generation
+
+This synthetic data set was simulated based on Caniglia, et al. (2023) and is not representative of a real data set or real causal effects. This data is meant to be used for this sandbox example only and will not match what was seen in the manuscript.
+
+```{r dataSim, message=FALSE, warning=FALSE, echo=FALSE}
+library(tidyverse)
+set.seed(325)
+
+# Sample Size
+n <- 111403
+
+# Baseline Covariates 
+
+## Age from a Normal dist. with a min of 18 and a max of 45 
+age <- sample(c("<18", "18-35", ">35"), 
+              n, 
+              replace = T, 
+              prob = c(4, 79, 17))
+
+## Parity from a binomial dist. where parity = 1 has a prob of 0.6
+parity <- rbinom(n, size = 1, prob = 0.6)
+
+## HIV from a binomial dist. where hiv = 1 has a prob of 0.22
+hiv <- rbinom(n, size = 1, prob = 0.22)
+
+covs <- cbind(age = age, parity = parity, hiv = hiv)
+covs <- as.data.frame(covs)
+covs$participant_id <- rownames(covs)
+
+# Simulate the exposure 
+
+## Exposure probabilities by week 
+probs <- c(1371/110032,
+           1382/108459,
+           1310/109917,
+           1400/105239,
+           1326/103623,
+           1403/101839,
+           1363/100090,
+           1376/98143,
+           1256/96226,
+           1231/94100,
+           1227/91797,
+           1208/88846,
+           1156/85324)
+
+# Generating exposure data matrix 
+exposure_data <- matrix(0, nrow = n, ncol = length(probs))
+
+for (i in seq_along(probs)) {
+  # Determine individuals who were previously unexposed
+  unexposed_individuals <- which(exposure_data[, i] == 0)
+  
+  # Generate exposure data for individuals who were previously unexposed
+  if (length(unexposed_individuals) > 0) {
+    exposure_data[unexposed_individuals, i] <- sample(c(0, 1), 
+                                                      length(unexposed_individuals),
+                                                      replace = TRUE, 
+                                                      prob = c(1 - probs[i], probs[i]))
+  }
+  
+  # Setting exposure to NA for individuals who were previously exposed
+  if (i > 1) {
+    previously_exposed <- exposure_data[, i - 1] == 1
+    exposure_data[previously_exposed, i:length(probs)] <- NA
+  }
+}
+
+# simulate the outcome 
+
+## Outcome probabilities by week 
+probs_o_0 <- c(
+  15672/110032,
+  15233/108549,
+  14802/106917,
+  14306/105239,
+  13808/103623,
+  13208/101839,
+  12617/100090,
+  11869/98143,
+  11031/96226,
+  9990/94100,
+  8769/91797,
+  6923/88846,
+  4551/85324
+)
+
+probs_o_1 <- c(
+  219/1371,
+  248/1382,
+  199/1310,
+  218/1400,
+  208/1326,
+  219/1403,
+  205/1363,
+  177/1376,
+  177/1256,
+  146/1231,
+  145/1227,
+  103/1208,
+  6/1156
+)
+
+# Simulate the outcome 
+outcome_data <- matrix(0, nrow = n, ncol = length(probs_o_0))
+
+for (i in seq_along(probs_o_0)) {
+  # Determine individuals without outcome
+  atrisk_individuals <- which(outcome_data[, i] == 0)
+  
+  # Generate outcome data among those at risk 
+  if (length(atrisk_individuals) > 0) {
+    # Apply different probabilities based on exposure status
+    outcome_probs <- ifelse(
+      exposure_data[atrisk_individuals, i] == 1, probs_o_1[i], probs_o_0[i]
+      )
+    
+    outcome_probs <- outcome_probs[!is.na(outcome_probs)]
+    
+    # Generate outcome data for unexposed individuals
+    outcome_data[atrisk_individuals, i] <- sample(c(0, 1), 
+                                                      length(atrisk_individuals),
+                                                      replace = TRUE, 
+                                                      prob = c(1 - outcome_probs[i], outcome_probs[i]))
+  }
+  
+  # Setting outcome to NA for individuals who have the outcome
+  if (i > 1) {
+    previously_exposed <- outcome_data[, i - 1] == 1
+    outcome_data[previously_exposed, i:length(probs_o_0)] <- NA
+  }
+}
+
+# Adding column names 
+colnames(outcome_data) <- paste0("wk_", 24:36)
+
+# Adding column names 
+exposure_data <- as.data.frame(exposure_data)
+outcome_data <- as.data.frame(outcome_data)
+
+start <- 24
+end <- 36
+col_names <- paste0("wk_", as.character(start:end))
+
+colnames(exposure_data) <- col_names
+colnames(outcome_data) <- col_names
+
+# Adding participant ID 
+exposure_data$participant_id <- rownames(exposure_data)
+outcome_data$participant_id <- rownames((outcome_data))
+
+
+# Combining into final dataset 
+exposure_long <- pivot_longer(exposure_data, 
+                              cols = starts_with("wk"), 
+                              names_to = "week", 
+                              values_to = "exposure_info")
+
+outcome_long <- pivot_longer(outcome_data, 
+                              cols = starts_with("wk"), 
+                              names_to = "week", 
+                              values_to = "outcome_info")
+
+final_data <- exposure_long
+final_data <- cbind(final_data, outcome = outcome_long$outcome_info)
+ids <- final_data$participant_id
+
+final_data <- merge(covs, final_data, by = "participant_id")
+final_data$participant_id <- ids
+
+
+# count <- final_data %>% 
+#   filter(week == "wk_35" & exposure_info == 1) %>% 
+#   nrow()
+```
+
+# Analysis
+
+```{r analysis, message=FALSE, warning=FALSE}
+# Getting number of exposed participants per week 
+exposure_counts <- final_data %>%
+  group_by(week, exposure_info) %>%
+  summarise(count = n()) %>%
+  pivot_wider(names_from = exposure_info, 
+              values_from = count, 
+              names_prefix = "exposure_") %>%
+  mutate(exposure_1 = coalesce(exposure_1, 0), 
+         exposure_0 = coalesce(exposure_0, 0))
+
+# Getting the number of outcome events per week by exposure status 
+outcome_counts <- final_data %>%
+  group_by(week, exposure_info) %>%
+  summarise(outcome_events = sum(outcome, na.rm = TRUE)) 
+
+# Data cleaning - creating factor variables
+
+factor_names <- c('age', 'hiv', 'parity')
+
+final_data[, factor_names] <- lapply(final_data[, factor_names], factor)
+
+head(final_data)
+
+# Data cleaning - creating numeric week variable 
+
+final_data$week_num <- as.numeric(gsub("wk_", "", final_data$week))
+
+# adjusted models by week 
+
+# Create a list to store results for each week
+adj_model_results <- list()
+
+for (wk in paste0("wk_", 24:36)) {
+  # Subset data for the current week
+  data_wk <- final_data %>% filter(week == wk)
+  
+  # Fit log-binomial regression model and store results
+  adj_model_results[[wk]] <- glm(outcome ~ exposure_info +
+                                   hiv +
+                                   parity +
+                                   age, 
+                                 data = data_wk, 
+                                 family = binomial(link = "log")) # log link for RR
+}
+
+
+# Pull RR (exp. beta values) and 95% confidence intervals into a dataframe 
+## Create a null dataframe 
+results_adj <- data.frame(
+  Week = character(),
+  Coefficient = numeric(),
+  Lower_CI = numeric(),
+  Upper_CI = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (wk in paste0("wk_", 24:36)) {
+  # Extract coefficients and confidence intervals
+  coefficients <- exp(adj_model_results[[wk]]$coefficients)
+  ci <- exp(confint(adj_model_results[[wk]]))
+  
+  # Store results in the data frame
+  results_adj <- rbind(results_adj, data.frame(
+    Week = wk,
+    Coefficient = coefficients["exposure_info"],
+    Lower_CI = ci["exposure_info", "2.5 %"],
+    Upper_CI = ci["exposure_info", "97.5 %"]
+  ))
+}
+
+# Pooled results 
+
+library(splines)
+
+model_pooled <- glm(outcome ~ exposure_info +
+                      hiv +
+                      parity +
+                      age +
+                      ns(week_num, df = 2), # adding flexibility to the model for GA 
+                    data = final_data, 
+                    family = binomial(link = "log")) # log link for RR
+
+co_pooled <- exp(model_pooled$coefficients)
+
+# need to bootstrap confidence intervals 
+replicates <- 5 # this needs to be increased for a real analysis 
+bootstrap_estimates <- NULL
+
+for (i in 1:replicates) {
+  # set seed to i so we get a unique sample each time 
+  set.seed(i)
+  
+  # sample the data
+  index <- sample(1:nrow(final_data), nrow(final_data), replace = T)
+  
+  final_data_sample <- final_data[index,]
+  
+  # estimate the association in the resample 
+  model_boot <- glm(outcome ~ exposure_info +
+                      hiv +
+                      parity +
+                      age +
+                      ns(week_num, df = 2), # adding flexibility to the model for GA 
+                    data = final_data_sample, 
+                    family = binomial(link = "log")) # log link for RR
+  
+  bootstrap_estimates <- rbind(
+    bootstrap_estimates,
+    coef(model_boot)[2]
+  )
+  
+  # Print iteration number when i is divisible by 10
+  if (i %% 10 == 0) {
+    print(paste("Iteration:", i))
+  }
+  
+}
+
+se_estimate <- sd(bootstrap_estimates)
+
+lcl_pooled <- exp(coef(model_pooled)[2] - 1.96 * se_estimate)
+ucl_pooled <- exp(coef(model_pooled)[2] + 1.96 * se_estimate)
+
+pooled_dat <- data.frame(
+  Week = "pooled", 
+  Coefficient = co_pooled[2],  
+  Lower_CI = lcl_pooled, 
+  Upper_CI = ucl_pooled
+)
+
+results_adj <- rbind(results_adj, pooled_dat)
+```
+
+# Tables and Figures
+
+## RR summary figure
+
+```{r fig, message=FALSE, warning=FALSE}
+library(ggplot2)
+
+ggplot(results_adj, aes(x = Week, 
+                        y = Coefficient)) +
+  geom_pointrange(aes(ymin = Lower_CI, 
+                      ymax = Upper_CI), 
+                  color = "black") +
+  geom_point(color = "black", 
+             size = 3) +
+  geom_hline(yintercept = 1, 
+             linetype = 'solid',
+             color = 'red') +
+  labs(x = 'Week', 
+       y = "Relative Risk",
+       title = "Risk of PTB") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust = 1))
+
+```
+
+## Table
+
+To generate Latex tables online: <https://www.tablesgenerator.com/latex_tables#>
+
+```{=tex}
+\begin{table}[]
+\begin{tabular}{lllll}
+\hline
+Antibiotic Initiation at:             & Initiation & \# of individuals & Events, \# & RR (95\% CI)                                                                  \\ \hline
+\multirow{2}{*}{24 weeks}             & No         & 110082            & 15659      & \multirow{2}{*}{\begin{tabular}[c]{@{}l@{}}0.99 \\ (0.86, 1.12)\end{tabular}} \\
+                                      & Yes        & 1321              & 186        &                                                                               \\
+\multirow{2}{*}{25 weeks}             & No         & 108628            & 13186      & \multirow{2}{*}{\begin{tabular}[c]{@{}l@{}}1.06\\ (0.92, 1.21)\end{tabular}}  \\
+                                      & Yes        & 1454              & 186        &                                                                               \\
+\multirow{2}{*}{26 weeks}             & No         & 107316            & 10975      & \multirow{2}{*}{\begin{tabular}[c]{@{}l@{}}0.99\\ (0.84, 1.16)\end{tabular}}  \\
+                                      & Yes        & 1312              & 133        &                                                                               \\
+\multirow{2}{*}{27 weeks}             & No         & 105876            & 8963       & \multirow{2}{*}{\begin{tabular}[c]{@{}l@{}}0.99\\ (0.84, 1.17)\end{tabular}}  \\
+                                      & Yes        & 1440              & 124        &                                                                               \\
+\multirow{2}{*}{28 weeks}             & No         & 104555            & 7679       & \multirow{2}{*}{\begin{tabular}[c]{@{}l@{}}0.98\\ (0.80, 1.17)\end{tabular}}  \\
+                                      & Yes        & 1321              & 95         &                                                                               \\
+\multirow{2}{*}{29 weeks}             & No         & 103095            & 6289       & \multirow{2}{*}{\begin{tabular}[c]{@{}l@{}}0.96\\ (0.79, 1.17)\end{tabular}}  \\
+                                      & Yes        & 1460              & 85         &                                                                               \\
+\multirow{2}{*}{30 weeks}             & No         & 101656            & 5265       & \multirow{2}{*}{\begin{tabular}[c]{@{}l@{}}1.28\\ (1.06, 1.52)\end{tabular}}  \\
+                                      & Yes        & 1439              & 100        &                                                                               \\
+\multirow{2}{*}{31 weeks}             & No         & 100249            & 4446       & \multirow{2}{*}{\begin{tabular}[c]{@{}l@{}}1.24\\ (0.99, 1.51)\end{tabular}}  \\
+                                      & Yes        & 1407              & 74         &                                                                               \\
+\multirow{2}{*}{32 weeks}             & No         & 98962             & 3636       & \multirow{2}{*}{\begin{tabular}[c]{@{}l@{}}1.06\\ (0.80, 1.35)\end{tabular}}  \\
+                                      & Yes        & 1287              & 50         &                                                                               \\
+\multirow{2}{*}{33 weeks}             & No         & 97722             & 2972       & \multirow{2}{*}{\begin{tabular}[c]{@{}l@{}}0.91\\ (0.65, 1.24)\end{tabular}}  \\
+                                      & Yes        & 1240              & 34         &                                                                               \\
+\multirow{2}{*}{34 weeks}             & No         & 1317              & 2327       & \multirow{2}{*}{\begin{tabular}[c]{@{}l@{}}0.74\\ (0.49, 1.06)\end{tabular}}  \\
+                                      & Yes        & 96405             & 24         &                                                                               \\
+\multirow{2}{*}{35 weeks}             & No         & 1303              & 1691       & \multirow{2}{*}{\begin{tabular}[c]{@{}l@{}}1.07\\ (0.72, 1.52)\end{tabular}}  \\
+                                      & Yes        & 95102             & 26         &                                                                               \\
+\multirow{2}{*}{36 weeks}             & No         & 93841             & 1037       & \multirow{2}{*}{\begin{tabular}[c]{@{}l@{}}0.62\\ (0.29, 1.15)\end{tabular}}  \\
+                                      & Yes        & 1261              & 8          &                                                                               \\ \hline
+\multirow{2}{*}{Pooled (24-36 weeks)} & No         & 1323489           & 84125      & \multirow{2}{*}{\begin{tabular}[c]{@{}l@{}}1.02\\ (0.98, 1.07)\end{tabular}}  \\
+                                      & Yes        & 17562             & 1125       &                                                                               \\ \hline
+\end{tabular}
+\end{table}
+```
