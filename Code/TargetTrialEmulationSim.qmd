@@ -295,7 +295,7 @@ model_pooled <- glm(outcome ~ exposure_info +
 co_pooled <- exp(model_pooled$coefficients)
 
 # need to bootstrap confidence intervals 
-replicates <- 5 # this needs to be increased for a real analysis 
+replicates <- 25 # this needs to be increased for a real analysis 
 bootstrap_estimates <- NULL
 
 for (i in 1:replicates) {
